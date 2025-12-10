@@ -1,0 +1,276 @@
+﻿ <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Weather Tracker</title>
+    <style>
+        /* Dark Mode Styling */
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+
+        /* The Bell Container */
+        .notification-container {
+            position: relative;
+            margin-bottom: 30px;
+        }
+
+        /* Bell Icon */
+        .bell-btn {
+            background-color: #2c2c2c;
+            border: 1px solid #333;
+            border-radius: 50%;
+            width: 100px;
+            height: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+            cursor: default;
+        }
+
+        .bell-icon {
+            width: 50px;
+            height: 50px;
+            fill: #ffffff;
+        }
+
+        /* Red Dot (Only appears for WARNINGS) */
+        .badge {
+            position: absolute;
+            top: 22px;
+            right: 25px;
+            width: 18px;
+            height: 18px;
+            background-color: #ff453a;
+            border-radius: 50%;
+            border: 3px solid #2c2c2c;
+            display: none; /* Hidden unless Bad Weather */
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 69, 58, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 69, 58, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 69, 58, 0); }
+        }
+
+        /* Text Info */
+        h2 { margin: 0; font-weight: 500; font-size: 22px; margin-bottom: 10px; }
+        
+        #statusText {
+            color: #a0a0a0;
+            font-size: 16px;
+            max-width: 80%;
+            line-height: 1.5;
+        }
+
+        /* "Enable Notifications" Button (Required by browsers) */
+        #permBtn {
+            margin-top: 30px;
+            padding: 12px 25px;
+            background-color: #8ab4f8;
+            color: #121212;
+            border: none;
+            border-radius: 30px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            display: none; /* Hidden if already allowed */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="notification-container">
+        <div class="bell-btn">
+            <svg class="bell-icon" viewBox="0 0 24 24">
+                <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"/>
+            </svg>
+            <div class="badge" id="notificationBadge"></div>
+        </div>
+    </div>
+
+    <h2 id="weatherHeader">Initializing...</h2>
+    <div id="statusText">Checking permissions and location...</div>
+
+    <button id="permBtn" onclick="requestPermission()">🔔 Enable Weather Alerts</button>
+
+    <script>
+        const apiKey = "cea950af890c4ecc98e85419251207";
+        const header = document.getElementById('weatherHeader');
+        const statusText = document.getElementById('statusText');
+        const badge = document.getElementById('notificationBadge');
+        const permBtn = document.getElementById('permBtn');
+
+        // --- 1. SETUP: Mobile System Notification Engine ---
+        if ('serviceWorker' in navigator) {
+            // This creates a virtual file to handle background notifications
+            const swCode = `
+                self.addEventListener('install', () => self.skipWaiting());
+                self.addEventListener('activate', () => self.clients.claim());
+                self.addEventListener('push', (event) => {
+                    const data = event.data.json();
+                    self.registration.showNotification(data.title, {
+                        body: data.body,
+                        icon: data.icon,
+                        vibrate: data.vibrate,
+                        tag: 'weather-update'
+                    });
+                });
+            `;
+            const blob = new Blob([swCode], {type: 'application/javascript'});
+            const swUrl = URL.createObjectURL(blob);
+            navigator.serviceWorker.register(swUrl);
+        }
+
+        // --- 2. PERMISSIONS: Check if we can notify ---
+        function checkPermission() {
+            if (Notification.permission === "granted") {
+                getLocationAndFetchWeather();
+            } else if (Notification.permission !== "denied") {
+                header.innerText = "Setup Required";
+                statusText.innerText = "Please enable notifications to receive weather updates on your phone panel.";
+                permBtn.style.display = "inline-block";
+            } else {
+                statusText.innerText = "Notifications are blocked. Please reset site settings.";
+            }
+        }
+
+        function requestPermission() {
+            Notification.requestPermission().then(permission => {
+                if (permission === "granted") {
+                    permBtn.style.display = "none";
+                    getLocationAndFetchWeather();
+                }
+            });
+        }
+
+        // --- 3. LOCATION: Find the user ---
+        function getLocationAndFetchWeather() {
+            if (navigator.geolocation) {
+                header.innerText = "Locating...";
+                statusText.innerText = "Finding your position...";
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        fetchWeatherData(position.coords.latitude, position.coords.longitude);
+                    },
+                    (error) => {
+                        header.innerText = "Location Error";
+                        statusText.innerText = "Please allow location access to get local weather.";
+                    }
+                );
+            }
+        }
+
+        // --- 4. API: Get Weather Data ---
+        async function fetchWeatherData(lat, lon) {
+            const url = `https://api.weatherapi.com/v1/forecast.json?key=${apiKey}&q=${lat},${lon}&days=1&aqi=no`;
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                analyzeWeather(data);
+            } catch (error) {
+                statusText.innerText = "Connection failed. Retrying...";
+            }
+        }
+
+        // --- 5. LOGIC: Decide on Alert vs Notification ---
+        function analyzeWeather(data) {
+            const current = data.current;
+            const forecast = data.forecast.forecastday[0].day;
+            const temp = current.temp_c;
+            const text = current.condition.text.toLowerCase();
+            const code = current.condition.code;
+            const location = data.location.name;
+
+            let title = "";
+            let body = "";
+            let icon = "";
+            let vibratePattern = []; // No vibration for good weather
+            let isSevere = false;
+
+            // --- SEVERE WEATHER CHECK ---
+            if (text.includes("thunder") || code === 1087) {
+                title = "⚡ Thunderstorm Alert";
+                body = `WARNING: Thunderstorms detected in ${location}. Temp: ${temp}°C`;
+                icon = "https://cdn-icons-png.flaticon.com/512/1146/1146860.png";
+                vibratePattern = [200, 100, 200, 100, 200]; // Vibrate alert
+                isSevere = true;
+            } 
+            else if (text.includes("heavy rain") || code === 1195) {
+                title = "🌧️ Heavy Rain Alert";
+                body = `WARNING: Heavy rainfall expected in ${location}. Temp: ${temp}°C`;
+                icon = "https://cdn-icons-png.flaticon.com/512/1163/1163657.png";
+                vibratePattern = [200, 100, 200];
+                isSevere = true;
+            }
+            else if (temp >= 40) {
+                title = "🔥 Heat Wave Warning";
+                body = `DANGER: Extreme heat (${temp}°C) in ${location}. Stay hydrated.`;
+                icon = "https://cdn-icons-png.flaticon.com/512/1684/1684375.png";
+                vibratePattern = [500, 200, 500];
+                isSevere = true;
+            }
+            else if (text.includes("rain") || forecast.daily_will_it_rain === 1) {
+                title = "☔ Rain Expected";
+                body = `Rain is expected in ${location}. Temp: ${temp}°C`;
+                icon = "https://cdn-icons-png.flaticon.com/512/414/414974.png";
+                vibratePattern = [200];
+                isSevere = true; // Still counts as an "Alert"
+            }
+            // --- GOOD/NORMAL WEATHER ---
+            else {
+                title = `☀️ Weather in ${location}`;
+                body = `Current conditions: ${current.condition.text}. Temp: ${temp}°C`;
+                icon = "https://cdn-icons-png.flaticon.com/512/869/869869.png";
+                vibratePattern = []; // Silent notification
+                isSevere = false;
+            }
+
+            // Update UI on screen
+            header.innerText = title;
+            statusText.innerText = body;
+
+            // Handle the Visual Bell Badge (Red Dot)
+            if (isSevere) {
+                badge.style.display = "block"; 
+            } else {
+                badge.style.display = "none";
+            }
+
+            // SEND PHONE NOTIFICATION (Happens in both cases)
+            sendSystemNotification(title, body, icon, vibratePattern);
+        }
+
+        // --- 6. TRIGGER: Send to Android Panel ---
+        function sendSystemNotification(title, body, icon, vibration) {
+            if (Notification.permission === 'granted') {
+                navigator.serviceWorker.ready.then(registration => {
+                    registration.showNotification(title, {
+                        body: body,
+                        icon: icon,
+                        vibrate: vibration,
+                        badge: icon, // Small icon in status bar
+                        tag: 'weather-status' // Replaces old notification so they don't stack up
+                    });
+                });
+            }
+        }
+
+        // Start
+        checkPermission();
+
+    </script>
+</body>
+</html>
